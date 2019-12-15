@@ -9,7 +9,7 @@ from abc import abstractmethod, abstractproperty
 from urllib3.exceptions import ProtocolError, MaxRetryError
 
 from openshift import __version__
-from .exceptions import ResourceNotFoundError, ResourceNotUniqueError, ApiException
+from .exceptions import ResourceNotFoundError, ResourceNotUniqueError, ApiException, ServiceUnavailableError
 from .resource import Resource, ResourceList
 
 
@@ -29,6 +29,7 @@ class Discoverer(object):
         default_cachefile_name = 'osrcp-{0}.json'.format(hashlib.sha1(self.__get_default_cache_id()).hexdigest())
         self.__cache_file = cache_file or os.path.join(tempfile.gettempdir(), default_cachefile_name)
         self.__init_cache()
+        self.__deferred_exception = None
 
     def __get_default_cache_id(self):
         user = self.__get_user()
@@ -182,7 +183,11 @@ class Discoverer(object):
         subresources = {}
 
         path = '/'.join(filter(None, [prefix, group, version]))
-        resources_response = self.client.request('GET', path).resources or []
+        try:
+            resources_response = self.client.request('GET', path).resources or []
+        except ServiceUnavailableError as e:
+            self.__deferred_exception = e
+            resources_response = []
 
         resources_raw = list(filter(lambda resource: '/' not in resource['name'], resources_response))
         subresources_raw = list(filter(lambda resource: '/' in resource['name'], resources_response))
@@ -240,7 +245,7 @@ class Discoverer(object):
         if len(results) == 1:
             return results[0]
         elif not results:
-            raise ResourceNotFoundError('No matches found for {}'.format(kwargs))
+            raise self.__deferred_exception or ResourceNotFoundError('No matches found for {}'.format(kwargs))
         else:
             raise ResourceNotUniqueError('Multiple matches found for {}: {}'.format(kwargs, results))
 
